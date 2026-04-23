@@ -154,6 +154,11 @@ export function MonthlyPlanilla({
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
 
+  // Drag-to-select (mouse down + arrastrar para hacer rango)
+  const dragRef = useRef<{ anchor: { r: number; m: number }; moved: boolean } | null>(null)
+  const suppressNextClickRef = useRef(false)
+  const [isDragging, setIsDragging] = useState(false)
+
   function rectSelection(a: { r: number; m: number }, b: { r: number; m: number }): Set<string> {
     const r0 = Math.min(a.r, b.r)
     const r1 = Math.max(a.r, b.r)
@@ -571,6 +576,63 @@ export function MonthlyPlanilla({
     clearSelection()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, groupBy, visibleRange])
+
+  // Listener global para terminar el drag aunque el mouse se levante fuera
+  // de una celda. Suprime el próximo click si realmente arrastró.
+  useEffect(() => {
+    function onMouseUp() {
+      if (dragRef.current?.moved) {
+        suppressNextClickRef.current = true
+        window.setTimeout(() => {
+          suppressNextClickRef.current = false
+        }, 80)
+      }
+      dragRef.current = null
+      setIsDragging(false)
+    }
+    window.addEventListener('mouseup', onMouseUp)
+    return () => window.removeEventListener('mouseup', onMouseUp)
+  }, [])
+
+  // Cursor global + disable text selection mientras arrastra
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    if (isDragging) {
+      document.body.classList.add('mesa-dragging')
+    } else {
+      document.body.classList.remove('mesa-dragging')
+    }
+    return () => {
+      document.body.classList.remove('mesa-dragging')
+    }
+  }, [isDragging])
+
+  function handleCellMouseDown(e: React.MouseEvent, r: number, m: number) {
+    // Ignoramos si hay modifiers (shift = rango, ctrl/cmd = toggle — ya tienen su handler en onClick)
+    if (e.shiftKey || e.metaKey || e.ctrlKey) return
+    // Sólo drag con el botón primario
+    if (e.button !== 0) return
+    dragRef.current = { anchor: { r, m }, moved: false }
+  }
+
+  function handleCellMouseEnter(r: number, m: number) {
+    const drag = dragRef.current
+    if (!drag) return
+    const { anchor } = drag
+    if (anchor.r === r && anchor.m === m) return
+    if (!drag.moved) {
+      drag.moved = true
+      setIsDragging(true)
+    }
+    // Cancelar edición si estaba activa
+    setEditingCell(null)
+    setSelectionAnchor(anchor)
+    setSelection(rectSelection(anchor, { r, m }))
+  }
+
+  function wasJustDragged(): boolean {
+    return suppressNextClickRef.current
+  }
 
   function subtotalForGroup(g: RowGroup, year: number, month: number): number {
     let total = 0
@@ -1274,6 +1336,9 @@ export function MonthlyPlanilla({
                                 }}
                                 onSelectRange={() => handleSelectRange({ r: rowIdx, m: monthIdx })}
                                 onToggleSelect={() => handleToggleSelect({ r: rowIdx, m: monthIdx })}
+                                onCellMouseDown={(e) => handleCellMouseDown(e, rowIdx, monthIdx)}
+                                onCellMouseEnter={() => handleCellMouseEnter(rowIdx, monthIdx)}
+                                wasJustDragged={wasJustDragged}
                                 onMove={(r, c, edit, opts) => {
                                   if (opts?.extendSelection) {
                                     const anchor = selectionAnchor ?? { r: rowIdx, m: monthIdx }
@@ -1515,6 +1580,9 @@ type EditableCellProps = {
   onPasteRaw?: (text: string) => Promise<boolean>
   onSelectRange?: () => void
   onToggleSelect?: () => void
+  onCellMouseDown?: (e: React.MouseEvent) => void
+  onCellMouseEnter?: () => void
+  wasJustDragged?: () => boolean
   onMove: (
     rowIdx: number,
     monthIdx: number,
@@ -1558,6 +1626,9 @@ function EditableCell({
   onPasteRaw,
   onSelectRange,
   onToggleSelect,
+  onCellMouseDown,
+  onCellMouseEnter,
+  wasJustDragged,
   onMove,
   onAcceptPrediction,
   onDismissPrediction,
@@ -1701,8 +1772,22 @@ function EditableCell({
     <td
       ref={(el) => registerRef(rowIdx, monthIdx, el)}
       tabIndex={isEditable ? 0 : -1}
+      onMouseDown={(e) => {
+        if (!isEditable) return
+        onCellMouseDown?.(e)
+      }}
+      onMouseEnter={() => {
+        if (!isEditable) return
+        onCellMouseEnter?.()
+      }}
       onClick={(e) => {
         if (!isEditable) return
+        if (wasJustDragged?.()) {
+          // Acabamos de hacer drag — no entrar a edición
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
         if (e.shiftKey) {
           e.preventDefault()
           onSelectRange?.()
@@ -1742,14 +1827,14 @@ function EditableCell({
           onPasteAmount?.(n === 0 ? 0 : n)
         }
       }}
-      className={`px-4 py-2 text-right tabular-nums transition-colors outline-none focus:shadow-[inset_0_0_0_2px_rgba(184,92,56,0.5)] ${
+      className={`px-4 py-2 text-right tabular-nums transition-colors outline-none select-none focus:shadow-[inset_0_0_0_2px_rgba(184,92,56,0.5)] ${
         isCurrent ? 'th-current-month font-medium' : ''
       } ${
         isEditable ? 'cursor-pointer hover:bg-primary/10' : 'cursor-not-allowed opacity-60'
       } ${amount !== null ? 'text-foreground' : 'text-muted-foreground/70'} ${saved ? 'cell-saved' : ''} ${selectionClass}`}
       title={
         isEditable
-          ? 'Enter edita · Del limpia · Shift+click selecciona rango · Ctrl/Cmd+click toggle'
+          ? 'Enter edita · Del limpia · click+arrastrar o Shift+click selecciona rango'
           : 'Período cerrado'
       }
     >

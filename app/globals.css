@@ -337,6 +337,15 @@
   font-feature-settings: 'tnum', 'ss01';
 }
 
+/* Drag-to-select: cursor global + sin text selection en toda la página */
+body.mesa-dragging {
+  cursor: cell !important;
+  user-select: none !important;
+}
+body.mesa-dragging * {
+  cursor: cell !important;
+}
+
 /* Fade-in entry (para secciones colapsables al abrir) */
 @keyframes mesa-fade-in {
   from { opacity: 0; transform: translateY(-2px); }

@@ -57,7 +57,8 @@ const SECTIONS: Section[] = [
     title: 'Selección múltiple',
     icon: Keyboard,
     shortcuts: [
-      { keys: ['Shift', 'click'], label: 'Seleccionar rango desde la celda activa' },
+      { keys: ['click', 'arrastrar'], label: 'Seleccionar rectángulo con el mouse' },
+      { keys: ['Shift', 'click'], label: 'Extender desde la celda activa hasta acá' },
       { keys: ['Shift', '↑↓←→'], label: 'Extender selección con flechas' },
       { keys: ['⌘', 'click'], label: 'Agregar / quitar celda individual' },
       { keys: ['⌘', 'C'], label: 'Copiar selección al portapapeles (pegá en Excel)' },
