@@ -1,8 +1,8 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2, Paperclip, ReceiptText, Upload } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Loader2, Paperclip, ReceiptText, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +17,7 @@ import {
 import { Money } from '@/components/admin-backoffice/shared/money'
 import { getSupabaseBrowserClient } from '@/lib/supabase/client'
 import { submitPaymentReceipt } from '@/app/propietario/actions'
+import type { IAdminLiquidationItemDueAmount } from '@/lib/types'
 
 const BUCKET = 'iadmin-payment-receipts'
 const MAX_MB = 10
@@ -25,7 +26,34 @@ type Props = {
   liquidationItemId: string
   unitCode: string
   balanceRemaining: number
+  subtotal?: number
+  dueAmounts?: IAdminLiquidationItemDueAmount[]
   trigger?: React.ReactNode
+}
+
+type ResolvedDue = {
+  /** Vencimiento que aplica al pagar HOY (label, fecha, monto sugerido). */
+  active: IAdminLiquidationItemDueAmount | null
+  /** Recargo % aplicado en el vencimiento activo. */
+  surchargePct: number
+  /** Si pasó al menos un vencimiento sin pagar (estado "tarde"). */
+  isLate: boolean
+  /** Si todos los vencimientos ya pasaron. */
+  allOverdue: boolean
+}
+
+function resolveActiveDue(dueAmounts: IAdminLiquidationItemDueAmount[] | undefined, today: string): ResolvedDue {
+  if (!dueAmounts || dueAmounts.length === 0) {
+    return { active: null, surchargePct: 0, isLate: false, allOverdue: false }
+  }
+  const sorted = [...dueAmounts].sort((a, b) => a.date.localeCompare(b.date))
+  // El vencimiento "vigente" es el primero cuya fecha aún no pasó.
+  // Si todos pasaron, usamos el último (con su recargo).
+  const upcoming = sorted.find((d) => d.date >= today)
+  const active = upcoming ?? sorted[sorted.length - 1]
+  const isLate = !upcoming || active !== sorted[0]
+  const allOverdue = !upcoming
+  return { active, surchargePct: active?.surchargePct ?? 0, isLate, allOverdue }
 }
 
 function randomId() {
@@ -45,21 +73,34 @@ export function ReportPaymentDialog({
   liquidationItemId,
   unitCode,
   balanceRemaining,
+  subtotal,
+  dueAmounts,
   trigger,
 }: Props) {
   const router = useRouter()
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const resolved = useMemo(() => resolveActiveDue(dueAmounts, today), [dueAmounts, today])
+
+  // Si tenemos subtotal + un recargo activo, calculamos el monto sugerido.
+  // Si no, caemos al saldo pendiente como antes.
+  const suggestedAmount = useMemo(() => {
+    if (resolved.active) return resolved.active.amount
+    if (typeof subtotal === 'number' && subtotal > 0) return subtotal
+    return balanceRemaining
+  }, [resolved.active, subtotal, balanceRemaining])
+
   const [open, setOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [amount, setAmount] = useState(balanceRemaining > 0 ? String(balanceRemaining) : '')
-  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10))
+  const [amount, setAmount] = useState(suggestedAmount > 0 ? String(suggestedAmount) : '')
+  const [paidAt, setPaidAt] = useState(today)
   const [method, setMethod] = useState<'transferencia' | 'efectivo' | 'mercadopago' | 'otro'>('transferencia')
   const [reference, setReference] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   function reset() {
-    setAmount(balanceRemaining > 0 ? String(balanceRemaining) : '')
-    setPaidAt(new Date().toISOString().slice(0, 10))
+    setAmount(suggestedAmount > 0 ? String(suggestedAmount) : '')
+    setPaidAt(today)
     setMethod('transferencia')
     setReference('')
     setFile(null)
@@ -136,6 +177,8 @@ export function ReportPaymentDialog({
             Unidad {unitCode} · Saldo: <Money amount={balanceRemaining} />. El comprobante queda en revisión hasta que el admin lo apruebe.
           </DialogDescription>
         </DialogHeader>
+
+        <DueDateBanner resolved={resolved} subtotal={subtotal} />
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
@@ -234,4 +277,75 @@ export function ReportPaymentDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function DueDateBanner({
+  resolved,
+  subtotal,
+}: {
+  resolved: ResolvedDue
+  subtotal?: number
+}) {
+  const { active, surchargePct, isLate, allOverdue } = resolved
+  if (!active) return null
+
+  const dateLabel = formatDateAR(active.date)
+  const surchargeAmount = typeof subtotal === 'number' && surchargePct > 0
+    ? active.amount - subtotal
+    : 0
+
+  // 3 estados visuales:
+  //   - en término (1er venc, sin recargo) → verde
+  //   - tarde con recargo (estás dentro de un venc posterior) → ámbar
+  //   - vencidos todos → rojo
+  if (allOverdue) {
+    return (
+      <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 p-3 text-sm space-y-1">
+        <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400 font-medium">
+          <AlertTriangle className="w-4 h-4" />
+          Pasaste todos los vencimientos
+        </div>
+        <p className="text-xs text-rose-700/90 dark:text-rose-400/90">
+          El monto sugerido incluye el recargo del último vencimiento ({dateLabel} · +{surchargePct}%):{' '}
+          <strong className="tabular-nums"><Money amount={active.amount} /></strong>.
+        </p>
+      </div>
+    )
+  }
+  if (isLate && surchargePct > 0) {
+    return (
+      <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 text-sm space-y-1">
+        <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-medium">
+          <AlertTriangle className="w-4 h-4" />
+          Estás pagando con +{surchargePct}% de recargo
+        </div>
+        <p className="text-xs text-amber-700/90 dark:text-amber-400/90">
+          Pasaste el primer vencimiento. Próximo: {dateLabel}. Total a pagar:{' '}
+          <strong className="tabular-nums"><Money amount={active.amount} /></strong>
+          {surchargeAmount > 0 ? (
+            <> (recargo: <span className="tabular-nums"><Money amount={surchargeAmount} /></span>)</>
+          ) : null}
+          .
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 text-sm space-y-1">
+      <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-medium">
+        <CheckCircle2 className="w-4 h-4" />
+        Pagás dentro del primer vencimiento
+      </div>
+      <p className="text-xs text-emerald-700/90 dark:text-emerald-400/90">
+        Vencimiento: {dateLabel}. Total a pagar:{' '}
+        <strong className="tabular-nums"><Money amount={active.amount} /></strong>. Sin recargos.
+      </p>
+    </div>
+  )
+}
+
+function formatDateAR(iso: string) {
+  const [y, m, d] = iso.split('-').map(Number)
+  if (!y || !m || !d) return iso
+  return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`
 }

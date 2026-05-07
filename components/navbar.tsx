@@ -17,6 +17,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { NotificationsBell } from '@/components/notifications-bell'
 import { getSupabaseBrowserClient } from '@/lib/supabase/client'
 import { ROLE_HOME, ROLE_LABELS } from '@/lib/constants'
 import type { UserRole } from '@/lib/types'
@@ -128,6 +129,7 @@ export function Navbar() {
                 <UserRound className="h-3.5 w-3.5" />
                 {userState.fullName} · <span className="font-semibold text-foreground">{ROLE_LABELS[userState.role]}</span>
               </Link>
+              <NotificationsBell />
               <Button variant="outline" size="sm" className="gap-2" onClick={() => setLogoutDialogOpen(true)}>
                 <LogOut className="h-4 w-4" />
                 Salir

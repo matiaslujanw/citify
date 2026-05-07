@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { requireIAdmin } from '@/lib/auth'
 import { getIAdminUnitAccountStatement } from '@/lib/data'
+import { enqueueUserNotifications } from '@/lib/notifications'
 import { getSupabaseServerClient } from '@/lib/supabase/server'
 import type { IAdminExpenseStatus, IAdminUnitAccountStatement } from '@/lib/types'
 
@@ -418,12 +419,21 @@ export async function replicatePreviousMonth(
 // emitAndNotify: el boton magico del admin
 // ----------------------------------------------------------------------------
 
+const dueDateInputSchema = z.object({
+  label: z.string().trim().min(1).max(40),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  surchargePct: z.number().min(0).max(100),
+})
+
 const emitSchema = z.object({
   propertyId: z.string().uuid(),
   year: z.number().int(),
   month: z.number().int().min(1).max(12),
   extraNote: z.string().trim().max(280).optional(),
+  dueDates: z.array(dueDateInputSchema).min(1).max(4).optional(),
 })
+
+export type DueDateInput = z.input<typeof dueDateInputSchema>
 
 export type NeighborMessage = {
   itemId: string
@@ -462,6 +472,12 @@ function formatARS(n: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(n)
+}
+
+function formatDateForMessage(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  if (!y || !m || !d) return iso
+  return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`
 }
 
 // ----------------------------------------------------------------------------
@@ -644,29 +660,60 @@ export async function emitAndNotify(
     throw new Error('No hay unidades activas con alícuota definida.')
   }
 
-  // Cargar contacto del propietario registrado en Citify por unidad.
-  // Si esta query falla por RLS, simplemente no enriquecemos y seguimos
-  // usando los datos de iadmin_unit_holders.
-  type OwnerContact = { fullName: string | null; phone: string | null; email: string | null }
-  const ownerByUnit = new Map<string, OwnerContact>()
+  // Cargar contactos vinculados a Citify por unidad. Distinguimos:
+  //   - vecino_principal: quien EFECTIVAMENTE vive en la unidad. Es el contacto
+  //     primario para el WhatsApp y la referencia del día a día.
+  //   - propietario: dueño/a. Puede ser la misma persona que el vecino o no.
+  // Para los avisos in-app notificamos a ambos (dedupeando si coinciden).
+  // Si la query falla por RLS, no rompemos: seguimos con los holders del admin.
+  type Contact = {
+    profileId: string | null
+    fullName: string | null
+    phone: string | null
+    email: string | null
+  }
+  const residentByUnit = new Map<string, Contact>()
+  const ownerByUnit = new Map<string, Contact>()
+  // Para las notifs in-app: por unidad, la lista de profile_ids a notificar.
+  const recipientsByUnit = new Map<string, Set<string>>()
   try {
     const unitIds = eligibleUnits.map((u: any) => u.id as string)
     const { data: memberships } = await supabase
       .from('unit_profile_memberships')
-      .select('unit_id, relationship_type, active, is_primary, profiles(full_name, email, phone)')
+      .select('unit_id, profile_id, relationship_type, active, is_primary, profiles(full_name, email, phone)')
       .in('unit_id', unitIds)
-      .eq('relationship_type', 'propietario')
+      .in('relationship_type', ['propietario', 'vecino_principal'])
       .eq('active', true)
     for (const m of memberships ?? []) {
       const unitId = (m as any).unit_id as string
-      if (ownerByUnit.has(unitId) && !(m as any).is_primary) continue
+      const rel = (m as any).relationship_type as string
+      const profileId = ((m as any).profile_id as string | null) ?? null
       const prof = Array.isArray((m as any).profiles) ? (m as any).profiles[0] : (m as any).profiles
       if (!prof) continue
-      ownerByUnit.set(unitId, {
+
+      const contact: Contact = {
+        profileId,
         fullName: (prof.full_name ?? '').trim() || null,
         phone: (prof.phone ?? '').trim() || null,
         email: (prof.email ?? '').trim() || null,
-      })
+      }
+
+      if (rel === 'vecino_principal') {
+        // El vecino principal pisa al previo solo si está marcado is_primary.
+        if (!residentByUnit.has(unitId) || (m as any).is_primary) {
+          residentByUnit.set(unitId, contact)
+        }
+      } else if (rel === 'propietario') {
+        if (!ownerByUnit.has(unitId) || (m as any).is_primary) {
+          ownerByUnit.set(unitId, contact)
+        }
+      }
+
+      if (profileId) {
+        const set = recipientsByUnit.get(unitId) ?? new Set<string>()
+        set.add(profileId)
+        recipientsByUnit.set(unitId, set)
+      }
     }
   } catch {
     // Silencioso a propósito: no romper el flujo si esta lookup falla.
@@ -712,14 +759,22 @@ export async function emitAndNotify(
   }
   const totalPreviousBalance = Array.from(previousBalanceByUnit.values()).reduce((s, v) => s + v, 0)
 
-  // 5. Vencimientos por default
-  const nextMonth = parsed.month === 12 ? 1 : parsed.month + 1
-  const nextYear = parsed.month === 12 ? parsed.year + 1 : parsed.year
-  const mm = String(nextMonth).padStart(2, '0')
-  const dueDates = [
-    { label: '1er vencimiento', date: `${nextYear}-${mm}-10`, surcharge_pct: 0 },
-    { label: '2do vencimiento', date: `${nextYear}-${mm}-25`, surcharge_pct: 3 },
-  ]
+  // 5. Vencimientos: usamos los que pasó el admin desde el modal o, si no
+  // mandó, fallback a los defaults del próximo mes (día 10 / día 25).
+  let dueDates: Array<{ label: string; date: string; surcharge_pct: number }>
+  if (parsed.dueDates && parsed.dueDates.length > 0) {
+    dueDates = [...parsed.dueDates]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((d) => ({ label: d.label, date: d.date, surcharge_pct: d.surchargePct }))
+  } else {
+    const nextMonth = parsed.month === 12 ? 1 : parsed.month + 1
+    const nextYear = parsed.month === 12 ? parsed.year + 1 : parsed.year
+    const mm = String(nextMonth).padStart(2, '0')
+    dueDates = [
+      { label: '1er vencimiento', date: `${nextYear}-${mm}-10`, surcharge_pct: 0 },
+      { label: '2do vencimiento', date: `${nextYear}-${mm}-25`, surcharge_pct: 3 },
+    ]
+  }
 
   // 6. Crear / actualizar run
   const { data: run, error: runError } = await supabase
@@ -834,19 +889,32 @@ export async function emitAndNotify(
     const item = (newItems ?? []).find((i: any) => i.unit_id === u.id)
     const itemId = item?.id as string
 
-    // Resolver contacto del vecino con esta prioridad (campo a campo):
-    //   1. Propietario activo registrado en Citify (cargado en ownerByUnit)
-    //   2. Holder cargado a mano por el admin (iadmin_unit_holders)
+    // Resolver contacto a quién mostrar / a qué número mandar el wa.me.
+    // Prioridad por campo (queremos ir al "vecino que vive ahí" primero):
+    //   1. Vecino principal registrado en Citify (residentByUnit)
+    //   2. Propietario registrado en Citify (ownerByUnit) — útil si nadie
+    //      cargó al inquilino, o si el propietario vive ahí.
+    //   3. Holder cargado a mano por el admin (iadmin_unit_holders)
+    const resident = residentByUnit.get(u.id) ?? null
     const owner = ownerByUnit.get(u.id) ?? null
     const holders = Array.isArray(u.iadmin_unit_holders) ? u.iadmin_unit_holders : []
     const holder = holders.find((h: any) => h?.is_active) ?? holders[0] ?? null
 
     const contactName: string | null =
-      (owner?.fullName ?? '').trim() || (holder?.full_name ?? '').trim() || null
+      (resident?.fullName ?? '').trim() ||
+      (owner?.fullName ?? '').trim() ||
+      (holder?.full_name ?? '').trim() ||
+      null
     const contactPhone: string | null =
-      (owner?.phone ?? '').trim() || (holder?.phone ?? '').trim() || null
+      (resident?.phone ?? '').trim() ||
+      (owner?.phone ?? '').trim() ||
+      (holder?.phone ?? '').trim() ||
+      null
     const contactEmail: string | null =
-      (owner?.email ?? '').trim() || (holder?.email ?? '').trim() || null
+      (resident?.email ?? '').trim() ||
+      (owner?.email ?? '').trim() ||
+      (holder?.email ?? '').trim() ||
+      null
 
     const subtotal =
       Number(item?.ordinary_amount ?? 0) + Number(item?.extraordinary_amount ?? 0) + Number(item?.previous_balance ?? 0)
@@ -858,7 +926,22 @@ export async function emitAndNotify(
       : ''
 
     const noteLine = parsed.extraNote ? `\n\n${parsed.extraNote}` : ''
-    const message = `Hola ${contactName ?? 'vecino/a'}! Ya está la liquidación de ${monthLabel} de ${propertyName}. Tu unidad ${u.code} debe pagar ${formatARS(subtotal)} con vencimiento el ${dueDates[0].date}.${bankLine}${shareUrl ? `\nDetalle: ${shareUrl}` : ''}${noteLine}`
+
+    // Detalle de vencimientos: si hay más de uno, los listamos con el monto
+    // que sale en cada fecha (subtotal + recargo correspondiente).
+    const dueLines: string[] = []
+    if (dueDates.length === 1) {
+      dueLines.push(`Vencimiento: ${formatDateForMessage(dueDates[0].date)} → ${formatARS(subtotal)}`)
+    } else {
+      for (const d of dueDates) {
+        const amt = Math.round(subtotal * (1 + d.surcharge_pct / 100) * 100) / 100
+        const label = d.surcharge_pct > 0 ? ` (+${d.surcharge_pct}%)` : ''
+        dueLines.push(`${formatDateForMessage(d.date)}: ${formatARS(amt)}${label}`)
+      }
+    }
+    const dueBlock = `\n${dueLines.join('\n')}`
+
+    const message = `Hola ${contactName ?? 'vecino/a'}! Ya está la liquidación de ${monthLabel} de ${propertyName}. Tu unidad ${u.code}:${dueBlock}${bankLine}${shareUrl ? `\nDetalle: ${shareUrl}` : ''}${noteLine}`
 
     const phone = (contactPhone ?? '').replace(/[^\d+]/g, '')
     const whatsappBase = phone ? `https://wa.me/${phone.startsWith('+') ? phone.slice(1) : phone}` : 'https://wa.me'
@@ -886,6 +969,46 @@ export async function emitAndNotify(
     action: 'liquidation.emitted_from_planilla',
     metadata: { period: periodLabelShort, neighbors: neighbors.length, total: totalExpenses },
   })
+
+  // Notificar in-app a vecino_principal y propietario de cada unidad
+  // (deduplicado si son la misma persona). Reusamos `recipientsByUnit` que ya
+  // armamos arriba con todos los profiles activos vinculados.
+  try {
+    const itemByUnit = new Map<string, { id: string; subtotal: number; code: string }>()
+    for (const u of eligibleUnits) {
+      const item = (newItems ?? []).find((i: any) => i.unit_id === u.id)
+      if (!item) continue
+      const subtotal =
+        Number(item.ordinary_amount ?? 0) + Number(item.extraordinary_amount ?? 0) + Number(item.previous_balance ?? 0)
+      itemByUnit.set(u.id as string, {
+        id: item.id as string,
+        subtotal: Math.round(subtotal * 100) / 100,
+        code: u.code as string,
+      })
+    }
+
+    const notifs: Parameters<typeof enqueueUserNotifications>[0] = []
+    for (const [unitId, profileIds] of recipientsByUnit.entries()) {
+      const item = itemByUnit.get(unitId)
+      if (!item) continue
+      for (const profileId of profileIds) {
+        notifs.push({
+          recipientProfileId: profileId,
+          kind: 'liquidation_emitted' as const,
+          title: `Nueva liquidación de ${monthLabel}`,
+          body: `Tu unidad ${item.code} de ${propertyName}: ${formatARS(item.subtotal)} con vencimiento el ${formatDateForMessage(dueDates[0].date)}.`,
+          link: '/propietario',
+          liquidationRunId: run.id as string,
+          liquidationItemId: item.id,
+        })
+      }
+    }
+    if (notifs.length > 0) {
+      await enqueueUserNotifications(notifs)
+    }
+  } catch {
+    // No romper el flujo si falla notificar.
+  }
 
   revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   revalidatePath(`/iadmin/liquidaciones/${run.id}`)

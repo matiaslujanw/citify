@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { requireIAdmin } from '@/lib/auth'
+import { enqueueUserNotification } from '@/lib/notifications'
 import { getSupabaseServerClient } from '@/lib/supabase/server'
 
 const decisionSchema = z.object({
@@ -21,7 +22,7 @@ export async function approvePaymentReceipt(
   const { data: receipt } = await supabase
     .from('iadmin_payment_receipts')
     .select(
-      'id, liquidation_item_id, amount, paid_at, method, reference, status, payment_id, iadmin_liquidation_items!inner(id, unit_id, liquidation_run_id, iadmin_liquidation_runs!inner(id, administration_id, managed_property_id, accounting_period_id))',
+      'id, liquidation_item_id, amount, paid_at, method, reference, status, payment_id, submitted_by_profile_id, iadmin_liquidation_items!inner(id, unit_id, liquidation_run_id, iadmin_units!inner(code), iadmin_liquidation_runs!inner(id, administration_id, managed_property_id, accounting_period_id, period_year, period_month))',
     )
     .eq('id', parsed.receiptId)
     .maybeSingle()
@@ -81,6 +82,27 @@ export async function approvePaymentReceipt(
     .eq('id', parsed.receiptId)
   if (upErr) throw new Error(upErr.message)
 
+  // Notificar al propietario que reportó el pago.
+  try {
+    const submitterId = (receipt as any).submitted_by_profile_id as string | null
+    const unitCode = (Array.isArray(itemRel.iadmin_units) ? itemRel.iadmin_units[0] : (itemRel as any).iadmin_units)?.code
+    const period = `${String(runRel.period_month).padStart(2, '0')}/${runRel.period_year}`
+    if (submitterId) {
+      await enqueueUserNotification({
+        recipientProfileId: submitterId,
+        kind: 'payment_receipt_approved',
+        title: 'Tu pago fue aprobado',
+        body: `El admin aprobó tu comprobante por ${formatARSCompact(Number(receipt.amount))} de la unidad ${unitCode ?? ''} (${period}).`.trim(),
+        link: '/propietario',
+        liquidationRunId,
+        liquidationItemId,
+        paymentReceiptId: parsed.receiptId,
+      })
+    }
+  } catch {
+    // no bloqueante
+  }
+
   revalidatePath(`/iadmin/consorcios/${managedPropertyId}`, 'layout')
   revalidatePath('/propietario')
   return { paymentId: payment.id as string }
@@ -96,7 +118,7 @@ export async function rejectPaymentReceipt(
   const { data: receipt } = await supabase
     .from('iadmin_payment_receipts')
     .select(
-      'id, status, iadmin_liquidation_items!inner(iadmin_liquidation_runs!inner(administration_id, managed_property_id))',
+      'id, status, amount, submitted_by_profile_id, liquidation_item_id, iadmin_liquidation_items!inner(id, liquidation_run_id, iadmin_units!inner(code), iadmin_liquidation_runs!inner(id, administration_id, managed_property_id, period_year, period_month))',
     )
     .eq('id', parsed.receiptId)
     .maybeSingle()
@@ -131,9 +153,38 @@ export async function rejectPaymentReceipt(
     .eq('id', parsed.receiptId)
   if (error) throw new Error(error.message)
 
+  // Notificar al propietario que reportó el pago.
+  try {
+    const submitterId = (receipt as any).submitted_by_profile_id as string | null
+    const unitCode = (Array.isArray(itemRel?.iadmin_units) ? itemRel?.iadmin_units[0] : (itemRel as any)?.iadmin_units)?.code
+    const period = runRel ? `${String(runRel.period_month).padStart(2, '0')}/${runRel.period_year}` : ''
+    if (submitterId) {
+      await enqueueUserNotification({
+        recipientProfileId: submitterId,
+        kind: 'payment_receipt_rejected',
+        title: 'Tu pago fue rechazado',
+        body: `El admin rechazó tu comprobante de la unidad ${unitCode ?? ''}${period ? ` (${period})` : ''}.${parsed.reviewNotes ? ` Motivo: ${parsed.reviewNotes}` : ''}`.trim(),
+        link: '/propietario',
+        liquidationRunId: runRel?.id as string,
+        liquidationItemId: itemRel?.id as string,
+        paymentReceiptId: parsed.receiptId,
+      })
+    }
+  } catch {
+    // no bloqueante
+  }
+
   revalidatePath(`/iadmin/consorcios/${managedPropertyId}`, 'layout')
   revalidatePath('/propietario')
   return { ok: true }
+}
+
+function formatARSCompact(n: number): string {
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 0,
+  }).format(n)
 }
 
 export async function getReceiptSignedUrl(

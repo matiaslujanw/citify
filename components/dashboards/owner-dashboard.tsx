@@ -94,6 +94,8 @@ export function OwnerDashboard({ data }: { data: OwnerDashboardData }) {
                             liquidationItemId={unit.latestLiquidation.id}
                             unitCode={unit.membership.unitCode ?? unit.membership.unitId.slice(0, 8)}
                             balanceRemaining={unit.latestLiquidation.balanceRemaining}
+                            subtotal={unit.latestLiquidation.subtotal}
+                            dueAmounts={unit.latestLiquidation.dueAmounts}
                           />
                         </div>
                       ) : null}
