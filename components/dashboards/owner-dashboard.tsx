@@ -4,6 +4,7 @@ import { Building2, Home, Info, ReceiptText, Users } from 'lucide-react'
 import type { OwnerDashboardData } from '@/lib/types'
 import { Money } from '@/components/admin-backoffice/shared/money'
 import { ChatWidget } from '@/components/ai/chat-widget'
+import { ReportPaymentDialog } from '@/components/propietario/report-payment-dialog'
 
 function relationshipLabel(value: string) {
   return value.replace('_', ' ')
@@ -80,12 +81,23 @@ export function OwnerDashboard({ data }: { data: OwnerDashboardData }) {
                   </div>
 
                   {unit.latestLiquidation ? (
-                    <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                      <MiniMetric label="Ordinaria" value={<Money amount={unit.latestLiquidation.ordinaryAmount} />} />
-                      <MiniMetric label="Extraordinaria" value={<Money amount={unit.latestLiquidation.extraordinaryAmount} />} />
-                      <MiniMetric label="Saldo anterior" value={<Money amount={unit.latestLiquidation.previousBalance} />} />
-                      <MiniMetric label="Total" value={<Money amount={unit.latestLiquidation.subtotal} />} />
-                    </div>
+                    <>
+                      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <MiniMetric label="Ordinaria" value={<Money amount={unit.latestLiquidation.ordinaryAmount} />} />
+                        <MiniMetric label="Extraordinaria" value={<Money amount={unit.latestLiquidation.extraordinaryAmount} />} />
+                        <MiniMetric label="Saldo anterior" value={<Money amount={unit.latestLiquidation.previousBalance} />} />
+                        <MiniMetric label="Total" value={<Money amount={unit.latestLiquidation.subtotal} />} />
+                      </div>
+                      {unit.latestLiquidation.balanceRemaining > 0 ? (
+                        <div className="mt-3 flex justify-end">
+                          <ReportPaymentDialog
+                            liquidationItemId={unit.latestLiquidation.id}
+                            unitCode={unit.membership.unitCode ?? unit.membership.unitId.slice(0, 8)}
+                            balanceRemaining={unit.latestLiquidation.balanceRemaining}
+                          />
+                        </div>
+                      ) : null}
+                    </>
                   ) : (
                     <p className="mt-4 rounded-2xl border border-dashed border-border/50 p-4 text-sm text-muted-foreground">
                       Todavia no hay liquidaciones emitidas para esta unidad.

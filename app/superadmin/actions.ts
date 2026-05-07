@@ -522,7 +522,7 @@ export async function createManagedProperty(
   revalidatePath('/superadmin')
   revalidatePath('/iadmin')
   revalidatePath('/iadmin/cartera')
-  revalidatePath(`/iadmin/consorcios/${result.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${result.managed_property_id}`, "layout")
 
   return {
     buildingId: result.building_id,

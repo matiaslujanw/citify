@@ -63,7 +63,7 @@ export async function updateManagedProperty(input: z.input<typeof updateProperty
     metadata: patch,
   })
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   revalidatePath('/iadmin/cartera')
 }
 
@@ -137,7 +137,7 @@ export async function updatePropertyLegalInfo(input: z.input<typeof updateProper
     action: 'property.legal_updated',
   })
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
 }
 
 // ----------------------------------------------------------------------------
@@ -189,7 +189,7 @@ export async function createUnit(input: z.input<typeof createUnitSchema>) {
     metadata: { code: parsed.code },
   })
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   return { id: data.id as string }
 }
 
@@ -236,7 +236,7 @@ export async function updateUnit(input: z.input<typeof updateUnitSchema>) {
     metadata: patch,
   })
 
-  revalidatePath(`/iadmin/consorcios/${unit.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${unit.managed_property_id}`, "layout")
 }
 
 const deactivateUnitSchema = z.object({ unitId: z.string().uuid() })
@@ -271,7 +271,7 @@ export async function deactivateUnit(input: z.input<typeof deactivateUnitSchema>
     action: 'unit.deactivated',
   })
 
-  revalidatePath(`/iadmin/consorcios/${unit.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${unit.managed_property_id}`, "layout")
 }
 
 // ----------------------------------------------------------------------------
@@ -344,7 +344,7 @@ export async function createUnitHolder(input: z.input<typeof createHolderSchema>
     metadata: { full_name: parsed.fullName, holder_kind: parsed.holderKind },
   })
 
-  revalidatePath(`/iadmin/consorcios/${unit.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${unit.managed_property_id}`, "layout")
   return { id: data.id as string }
 }
 
@@ -394,7 +394,7 @@ export async function endUnitHolder(input: z.input<typeof endHolderSchema>) {
     action: 'holder.closed',
   })
 
-  revalidatePath(`/iadmin/consorcios/${propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${propertyId}`, "layout")
 }
 
 // ----------------------------------------------------------------------------
@@ -593,7 +593,7 @@ export async function createUnitUser(input: z.input<typeof createUnitUserSchema>
     },
   })
 
-  revalidatePath(`/iadmin/consorcios/${scope.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${scope.propertyId}`, "layout")
   return { profileId: targetProfileId }
 }
 
@@ -647,7 +647,7 @@ export async function deactivateUnitMembership(input: z.input<typeof deactivateU
     action: 'unit_user.deactivated',
   })
 
-  revalidatePath(`/iadmin/consorcios/${unit?.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${unit?.managed_property_id}`, "layout")
 }
 
 // ----------------------------------------------------------------------------
@@ -690,7 +690,7 @@ export async function createBuildingInformation(input: z.input<typeof buildingIn
   })
   if (error) throw new Error(error.message)
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   revalidatePath('/usuario')
   revalidatePath('/propietario')
 }
@@ -715,7 +715,7 @@ export async function deactivateBuildingInformation(input: z.input<typeof deacti
 
   if (error) throw new Error(error.message)
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   revalidatePath('/usuario')
   revalidatePath('/propietario')
 }
@@ -763,7 +763,7 @@ export async function openAccountingPeriod(input: z.input<typeof openPeriodSchem
     metadata: { period_year: parsed.periodYear, period_month: parsed.periodMonth },
   })
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   return { id: data.id as string }
 }
 
@@ -814,5 +814,5 @@ export async function changePeriodStatus(input: z.input<typeof changePeriodStatu
     action: `period.${parsed.nextStatus}`,
   })
 
-  revalidatePath(`/iadmin/consorcios/${period.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${period.managed_property_id}`, "layout")
 }

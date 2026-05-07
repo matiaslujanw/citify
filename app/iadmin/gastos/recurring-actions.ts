@@ -189,7 +189,7 @@ export async function cloneRecurringExpenses(
 
   revalidatePath('/iadmin/gastos')
   revalidatePath('/iadmin/cartera')
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
 
   // Helper para reset de un findMembership ref no usada (limpieza)
   void findMembership

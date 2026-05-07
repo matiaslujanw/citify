@@ -34,9 +34,15 @@ create table if not exists public.iadmin_reminders (
   notes text
 );
 
+-- Columna generada con la fecha (en UTC, expresion IMMUTABLE) para poder
+-- usarla en un índice único sin que postgres se queje por timezone.
+alter table public.iadmin_reminders
+  add column if not exists generated_on date
+    generated always as (((generated_at) at time zone 'UTC')::date) stored;
+
 -- Evitar duplicar el mismo recordatorio el mismo dia para el mismo item
 create unique index if not exists iadmin_reminders_daily_unique
-  on public.iadmin_reminders (liquidation_item_id, reminder_kind, (date(generated_at)));
+  on public.iadmin_reminders (liquidation_item_id, reminder_kind, generated_on);
 
 create index if not exists iadmin_reminders_admin_status_idx
   on public.iadmin_reminders (administration_id, status);

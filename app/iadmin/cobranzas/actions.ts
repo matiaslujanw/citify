@@ -132,7 +132,7 @@ export async function registerCollection(input: z.input<typeof registerSchema>) 
   })
 
   revalidatePath(`/iadmin/liquidaciones/${item.liquidation_run_id}`)
-  revalidatePath(`/iadmin/consorcios/${managedPropertyId}`)
+  revalidatePath(`/iadmin/consorcios/${managedPropertyId}`, "layout")
   revalidatePath(`/iadmin/consorcios/${managedPropertyId}/cuentas`)
   revalidatePath(`/iadmin/cobranzas`)
 
@@ -193,7 +193,7 @@ export async function voidCollection(input: z.input<typeof voidSchema>) {
     revalidatePath(`/iadmin/liquidaciones/${payment.liquidation_run_id}`)
   }
   if (payment.managed_property_id) {
-    revalidatePath(`/iadmin/consorcios/${payment.managed_property_id}`)
+    revalidatePath(`/iadmin/consorcios/${payment.managed_property_id}`, "layout")
     revalidatePath(`/iadmin/consorcios/${payment.managed_property_id}/cuentas`)
   }
   revalidatePath(`/iadmin/cobranzas`)

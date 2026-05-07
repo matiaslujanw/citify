@@ -1,9 +1,14 @@
 import { ExpensesTable } from '@/components/admin-backoffice/gastos/expenses-table'
 import { NewExpenseForm } from '@/components/admin-backoffice/gastos/new-expense-form'
+import { ScopedToBuildingBanner } from '@/components/admin-backoffice/shell/scoped-to-building-banner'
 import { can, requireIAdmin } from '@/lib/auth'
 import { getIAdminExpensesInbox, getIAdminPortfolio, getIAdminProviders } from '@/lib/data'
 
-export default async function GastosPage() {
+export default async function GastosPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ propertyId?: string }>
+}) {
   const { context } = await requireIAdmin({ capability: 'expenses.view' })
 
   const administrationId = context.primary?.administration.id
@@ -15,11 +20,21 @@ export default async function GastosPage() {
     )
   }
 
-  const [expenses, portfolio, providers] = await Promise.all([
+  const { propertyId } = await searchParams
+
+  const [allExpenses, portfolio, providers] = await Promise.all([
     getIAdminExpensesInbox(administrationId),
     getIAdminPortfolio(administrationId),
     getIAdminProviders(administrationId),
   ])
+
+  const expenses = propertyId
+    ? allExpenses.filter((e) => e.managedPropertyId === propertyId)
+    : allExpenses
+
+  const scopedProperty = propertyId
+    ? portfolio?.properties.find((p) => p.id === propertyId) ?? null
+    : null
 
   const canCreate = can(context, 'expenses.create', { administrationId })
 
@@ -27,11 +42,22 @@ export default async function GastosPage() {
     <div className="space-y-6">
       <header className="glass-card rounded-2xl p-6">
         <p className="text-xs uppercase tracking-wider text-primary font-medium">Bandeja de gastos</p>
-        <h1 className="font-serif text-2xl font-bold text-foreground mt-1">Gastos a procesar</h1>
+        <h1 className="font-serif text-2xl font-bold text-foreground mt-1">
+          {scopedProperty ? `Gastos · ${scopedProperty.displayName ?? scopedProperty.buildingName}` : 'Gastos a procesar'}
+        </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Vista cross-cartera. Filtra y prioriza gastos pendientes de revision o validacion documental.
+          {scopedProperty
+            ? 'Mostrando solo los gastos de este edificio.'
+            : 'Vista cross-cartera. Filtra y prioriza gastos pendientes de revision o validacion documental.'}
         </p>
       </header>
+
+      {scopedProperty ? (
+        <ScopedToBuildingBanner
+          propertyName={scopedProperty.displayName ?? scopedProperty.buildingName}
+          basePath="/iadmin/gastos"
+        />
+      ) : null}
 
       {canCreate && portfolio ? (
         <NewExpenseForm

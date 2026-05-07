@@ -371,7 +371,7 @@ export async function importExpenseFromExtraction(
   })
 
   // 9. Revalidar la mesa
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
 
   return {
     expenseId,

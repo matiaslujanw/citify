@@ -59,6 +59,20 @@ type Props = {
   canRegisterPayments: boolean
 }
 
+// LEGACY: features avanzadas de la Mesa del mes deshabilitadas mientras se
+// rediseña el flujo del consorcio (Resumen / Movimientos / Configuración).
+// Lo que se apaga con este flag:
+//   - MesaAssistant: panel lateral con IA. Sube facturas (PDF/imagen) y
+//     extrae monto/proveedor/fecha; también genera comunicados a vecinos.
+//   - MesaCommandPalette: Ctrl+K con accesos rápidos (publicar, undo, ir a
+//     configuración, asistente, etc.).
+//   - MesaBatchBar: barra que aparece al seleccionar múltiples celdas para
+//     aplicarles cambios en bloque (+10%, *1.05, =50000, copiar).
+//   - HistoryIndicator + Undo/Redo: historial de cambios + atajos
+//     Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z.
+// Para reactivar, poné `true` o eliminá el flag y los `&&` correspondientes.
+const LEGACY_MESA_ADVANCED = false
+
 type VisibleRange = 3 | 6 | 12
 
 const MONTH_SHORT_ES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
@@ -451,22 +465,28 @@ export function MonthlyPlanilla({
   // Hotkeys globales
   // --------------------------------------------------------------------------
   useHotkeys({
-    'mod+k': (e) => {
-      e.preventDefault()
-      setCommandOpen(true)
-    },
-    'mod+z': (e) => {
-      e.preventDefault()
-      void undo()
-    },
-    'mod+shift+z': (e) => {
-      e.preventDefault()
-      void redo()
-    },
-    'mod+y': (e) => {
-      e.preventDefault()
-      void redo()
-    },
+    // LEGACY: hotkeys de command palette y undo/redo deshabilitados con
+    // LEGACY_MESA_ADVANCED. Se dejan los handlers comentados para reactivar.
+    ...(LEGACY_MESA_ADVANCED
+      ? {
+          'mod+k': (e: KeyboardEvent) => {
+            e.preventDefault()
+            setCommandOpen(true)
+          },
+          'mod+z': (e: KeyboardEvent) => {
+            e.preventDefault()
+            void undo()
+          },
+          'mod+shift+z': (e: KeyboardEvent) => {
+            e.preventDefault()
+            void redo()
+          },
+          'mod+y': (e: KeyboardEvent) => {
+            e.preventDefault()
+            void redo()
+          },
+        }
+      : {}),
     'mod+c': (e) => {
       // Sólo interceptamos si hay selección múltiple; si no, dejamos pasar
       // el copy nativo del browser.
@@ -910,27 +930,31 @@ export function MonthlyPlanilla({
             </div>
             <div className="pt-1 flex items-center gap-3 flex-wrap">
               <SavedIndicator lastSavedAt={lastSavedAt} pendingCount={pendingCells.size} />
-              <HistoryIndicator
-                canUndo={history.length > 0}
-                canRedo={redoStack.length > 0}
-                undoLabel={history[history.length - 1]?.label}
-                redoLabel={redoStack[redoStack.length - 1]?.label}
-                onUndo={() => void undo()}
-                onRedo={() => void redo()}
-              />
+              {LEGACY_MESA_ADVANCED ? (
+                <HistoryIndicator
+                  canUndo={history.length > 0}
+                  canRedo={redoStack.length > 0}
+                  undoLabel={history[history.length - 1]?.label}
+                  redoLabel={redoStack[redoStack.length - 1]?.label}
+                  onUndo={() => void undo()}
+                  onRedo={() => void redo()}
+                />
+              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setCommandOpen(true)}
-              className="hidden md:inline-flex items-center gap-2 rounded-full border border-border/50 bg-background px-3 py-1 text-[11px] text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors"
-              title="Acciones rápidas"
-            >
-              <Search className="w-3 h-3" />
-              Buscar
-              <span className="kbd-hint">⌘K</span>
-            </button>
+            {LEGACY_MESA_ADVANCED ? (
+              <button
+                type="button"
+                onClick={() => setCommandOpen(true)}
+                className="hidden md:inline-flex items-center gap-2 rounded-full border border-border/50 bg-background px-3 py-1 text-[11px] text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors"
+                title="Acciones rápidas"
+              >
+                <Search className="w-3 h-3" />
+                Buscar
+                <span className="kbd-hint">⌘K</span>
+              </button>
+            ) : null}
             {canManageRubros && !showRubroForm ? (
               <Button size="sm" variant="outline" onClick={() => setShowRubroForm(true)}>
                 <Plus className="w-3.5 h-3.5 mr-1" />
@@ -1073,14 +1097,18 @@ export function MonthlyPlanilla({
                       title="La planilla está vacía"
                       description={
                         canManageRubros
-                          ? 'Agregá tu primer rubro (luz, encargado, mantenimiento…) o arrastrá una factura y la IA la carga sola.'
+                          ? LEGACY_MESA_ADVANCED
+                            ? 'Agregá tu primer rubro (luz, encargado, mantenimiento…) o arrastrá una factura y la IA la carga sola.'
+                            : 'Agregá tu primer rubro (luz, encargado, mantenimiento…).'
                           : 'Todavía no se cargaron rubros. Un administrador con permisos puede agregarlos.'
                       }
                       actions={
                         canManageRubros
                           ? [
-                              { label: 'Agregar rubro', onClick: () => setShowRubroForm(true), shortcut: 'N', kind: 'primary' },
-                              { label: 'Extraer factura', onClick: () => openAssistantTab('extract'), kind: 'secondary' },
+                              { label: 'Agregar rubro', onClick: () => setShowRubroForm(true), shortcut: 'N', kind: 'primary' as const },
+                              ...(LEGACY_MESA_ADVANCED
+                                ? [{ label: 'Extraer factura', onClick: () => openAssistantTab('extract'), kind: 'secondary' as const }]
+                                : []),
                             ]
                           : []
                       }
@@ -1389,7 +1417,7 @@ export function MonthlyPlanilla({
         <PublishDialog result={publishResult} onClose={() => setPublishResult(null)} />
       ) : null}
 
-      {assistantOpen ? (
+      {LEGACY_MESA_ADVANCED && assistantOpen ? (
         <MesaAssistant
           propertyId={grid.propertyId}
           administrationId={grid.administrationId}
@@ -1407,40 +1435,42 @@ export function MonthlyPlanilla({
         />
       ) : null}
 
-      <MesaCommandPalette
-        open={commandOpen}
-        onOpenChange={setCommandOpen}
-        grid={grid}
-        state={state}
-        canEmit={canEmit}
-        canManageRubros={canManageRubros}
-        canUndo={history.length > 0}
-        canRedo={redoStack.length > 0}
-        undoLabel={history[history.length - 1]?.label}
-        redoLabel={redoStack[redoStack.length - 1]?.label}
-        onUndo={() => void undo()}
-        onRedo={() => void redo()}
-        onOpenAssistant={() => openAssistantTab('menu')}
-        onOpenAssistantExtract={() => openAssistantTab('extract')}
-        onOpenAssistantAnnounce={() => openAssistantTab('announce')}
-        onToggleChart={handleToggleChart}
-        onFocusSearch={focusSearch}
-        onAddRubro={handleAddRubroTrigger}
-        onEmit={() => {
-          document.querySelector('[data-emit-button]')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          ;(document.querySelector<HTMLButtonElement>('[data-emit-button]'))?.focus()
-        }}
-        onOpenUnit={handleOpenUnit}
-        onJumpToProvider={handleJumpToProvider}
-        onOpenConfiguracion={() => router.push(`/iadmin/consorcios/${grid.propertyId}/configuracion`)}
-        onOpenHelp={() => setHelpOpen(true)}
-      />
+      {LEGACY_MESA_ADVANCED ? (
+        <MesaCommandPalette
+          open={commandOpen}
+          onOpenChange={setCommandOpen}
+          grid={grid}
+          state={state}
+          canEmit={canEmit}
+          canManageRubros={canManageRubros}
+          canUndo={history.length > 0}
+          canRedo={redoStack.length > 0}
+          undoLabel={history[history.length - 1]?.label}
+          redoLabel={redoStack[redoStack.length - 1]?.label}
+          onUndo={() => void undo()}
+          onRedo={() => void redo()}
+          onOpenAssistant={() => openAssistantTab('menu')}
+          onOpenAssistantExtract={() => openAssistantTab('extract')}
+          onOpenAssistantAnnounce={() => openAssistantTab('announce')}
+          onToggleChart={handleToggleChart}
+          onFocusSearch={focusSearch}
+          onAddRubro={handleAddRubroTrigger}
+          onEmit={() => {
+            document.querySelector('[data-emit-button]')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            ;(document.querySelector<HTMLButtonElement>('[data-emit-button]'))?.focus()
+          }}
+          onOpenUnit={handleOpenUnit}
+          onJumpToProvider={handleJumpToProvider}
+          onOpenConfiguracion={() => router.push(`/iadmin/consorcios/${grid.propertyId}/configuracion`)}
+          onOpenHelp={() => setHelpOpen(true)}
+        />
+      ) : null}
 
       <MesaHelpOverlay open={helpOpen} onOpenChange={setHelpOpen} />
 
       <MesaDropZone onFile={handleDropFile} />
 
-      {selection.size > 1 ? (
+      {LEGACY_MESA_ADVANCED && selection.size > 1 ? (
         <MesaBatchBar
           count={selection.size}
           onClear={clearSelection}

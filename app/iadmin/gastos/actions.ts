@@ -247,7 +247,7 @@ export async function createExpense(input: CreateExpenseInput) {
 
   revalidatePath('/iadmin/gastos')
   revalidatePath('/iadmin/cartera')
-  revalidatePath(`/iadmin/consorcios/${parsed.managedPropertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.managedPropertyId}`, "layout")
   return { id: data.id as string, status: initialStatus }
 }
 

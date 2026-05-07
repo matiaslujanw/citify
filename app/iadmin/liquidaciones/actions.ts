@@ -261,7 +261,7 @@ export async function generateLiquidationRun(input: z.input<typeof generateSchem
 
   revalidatePath('/iadmin/liquidaciones')
   revalidatePath(`/iadmin/liquidaciones/${run.id}`)
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
 
   return {
     id: run.id as string,
@@ -326,5 +326,5 @@ export async function changeLiquidationStatus(input: z.input<typeof transitionSc
 
   revalidatePath('/iadmin/liquidaciones')
   revalidatePath(`/iadmin/liquidaciones/${parsed.runId}`)
-  revalidatePath(`/iadmin/consorcios/${run.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${run.managed_property_id}`, "layout")
 }

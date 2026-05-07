@@ -89,7 +89,7 @@ export async function createCashAccount(input: z.input<typeof createAccountSchem
   })
 
   revalidatePath(`/iadmin/consorcios/${parsed.propertyId}/cuentas`)
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   return { id: data.id as string }
 }
 
@@ -139,7 +139,7 @@ export async function updateCashAccount(input: z.input<typeof updateAccountSchem
   })
 
   revalidatePath(`/iadmin/consorcios/${account.managed_property_id}/cuentas`)
-  revalidatePath(`/iadmin/consorcios/${account.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${account.managed_property_id}`, "layout")
 }
 
 const toggleAccountSchema = z.object({
@@ -181,7 +181,7 @@ export async function setCashAccountActive(input: z.input<typeof toggleAccountSc
   })
 
   revalidatePath(`/iadmin/consorcios/${account.managed_property_id}/cuentas`)
-  revalidatePath(`/iadmin/consorcios/${account.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${account.managed_property_id}`, "layout")
 }
 
 // ----------------------------------------------------------------------------
@@ -240,7 +240,7 @@ export async function addManualMovement(input: z.input<typeof manualMovementSche
   })
 
   revalidatePath(`/iadmin/consorcios/${account.managed_property_id}/cuentas`)
-  revalidatePath(`/iadmin/consorcios/${account.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${account.managed_property_id}`, "layout")
 }
 
 // ----------------------------------------------------------------------------
@@ -322,6 +322,6 @@ export async function payExpense(input: z.input<typeof payExpenseSchema>) {
 
   revalidatePath(`/iadmin/gastos`)
   revalidatePath(`/iadmin/gastos/${parsed.expenseId}`)
-  revalidatePath(`/iadmin/consorcios/${expense.managed_property_id}`)
+  revalidatePath(`/iadmin/consorcios/${expense.managed_property_id}`, "layout")
   revalidatePath(`/iadmin/consorcios/${expense.managed_property_id}/cuentas`)
 }

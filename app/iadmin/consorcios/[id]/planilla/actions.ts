@@ -101,7 +101,7 @@ export async function upsertMonthlyCell(
       action: 'expense.deleted_from_planilla',
       metadata: { period: `${parsed.year}-${parsed.month}` },
     })
-    revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+    revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
     return { action: 'deleted', expenseId: null }
   }
 
@@ -146,7 +146,7 @@ export async function upsertMonthlyCell(
       })
       .eq('id', existing.id)
     if (error) throw new Error(error.message)
-    revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+    revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
     return { action: 'updated', expenseId: existing.id as string }
   }
 
@@ -173,7 +173,7 @@ export async function upsertMonthlyCell(
     .single()
   if (error) throw new Error(error.message)
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   return { action: 'created', expenseId: inserted.id as string }
 }
 
@@ -237,6 +237,184 @@ export async function addRecurringRubro(input: z.input<typeof addRubroSchema>): 
 }
 
 // ----------------------------------------------------------------------------
+// addExpenseLine: agrega una línea de gasto (recurrente o eventual) y carga
+// su monto del mes en curso en un solo paso. Pensado para la vista
+// "Movimientos" simplificada del consorcio.
+// ----------------------------------------------------------------------------
+
+const addExpenseLineSchema = z.object({
+  propertyId: z.string().uuid(),
+  administrationId: z.string().uuid(),
+  name: z.string().trim().min(1).max(120),
+  amount: z.number().nonnegative().nullable(),
+  kind: z.enum(['ordinaria', 'extraordinaria']).default('ordinaria'),
+  isRecurring: z.boolean().default(false),
+  year: z.number().int().min(2020).max(2100),
+  month: z.number().int().min(1).max(12),
+})
+
+export async function addExpenseLine(
+  input: z.input<typeof addExpenseLineSchema>,
+): Promise<{ providerId: string; expenseId: string | null }> {
+  const parsed = addExpenseLineSchema.parse(input)
+  await requireIAdmin({
+    capability: 'providers.manage',
+    administrationId: parsed.administrationId,
+  })
+  const supabase = await getSupabaseServerClient()
+  if (!supabase) throw new Error('Supabase no configurado')
+
+  // Reusar provider con mismo nombre dentro de la administración si ya existe.
+  const { data: existing } = await supabase
+    .from('iadmin_providers')
+    .select('id, is_recurring')
+    .eq('administration_id', parsed.administrationId)
+    .ilike('name', parsed.name.trim())
+    .maybeSingle()
+
+  let providerId: string
+  if (existing) {
+    providerId = existing.id as string
+    if (parsed.isRecurring && !existing.is_recurring) {
+      await supabase
+        .from('iadmin_providers')
+        .update({ is_recurring: true, recurring_kind: parsed.kind })
+        .eq('id', providerId)
+    }
+  } else {
+    const { data: created, error } = await supabase
+      .from('iadmin_providers')
+      .insert({
+        administration_id: parsed.administrationId,
+        name: parsed.name.trim(),
+        is_recurring: parsed.isRecurring,
+        recurring_kind: parsed.kind,
+        is_active: true,
+      })
+      .select('id')
+      .single()
+    if (error || !created) throw new Error(error?.message ?? 'No se pudo crear el rubro')
+    providerId = created.id as string
+  }
+
+  let expenseId: string | null = null
+  if (parsed.amount !== null && parsed.amount > 0) {
+    const result = await upsertMonthlyCell({
+      propertyId: parsed.propertyId,
+      providerId,
+      year: parsed.year,
+      month: parsed.month,
+      amount: parsed.amount,
+      expenseKind: parsed.kind,
+    })
+    expenseId = result.expenseId
+  }
+
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, 'layout')
+  return { providerId, expenseId }
+}
+
+// ----------------------------------------------------------------------------
+// replicatePreviousMonth: para cada gasto recurrente con monto en el mes
+// anterior, copia ese monto al mes actual si la celda actual está vacía.
+// ----------------------------------------------------------------------------
+
+const replicateSchema = z.object({
+  propertyId: z.string().uuid(),
+  year: z.number().int().min(2020).max(2100),
+  month: z.number().int().min(1).max(12),
+})
+
+export async function replicatePreviousMonth(
+  input: z.input<typeof replicateSchema>,
+): Promise<{ replicated: number }> {
+  const parsed = replicateSchema.parse(input)
+  const supabase = await getSupabaseServerClient()
+  if (!supabase) throw new Error('Supabase no configurado')
+
+  const { data: property } = await supabase
+    .from('iadmin_managed_properties')
+    .select('id, administration_id')
+    .eq('id', parsed.propertyId)
+    .maybeSingle()
+  if (!property) throw new Error('Consorcio no encontrado')
+
+  await requireIAdmin({
+    capability: 'expenses.create',
+    administrationId: property.administration_id,
+  })
+
+  const prevYear = parsed.month === 1 ? parsed.year - 1 : parsed.year
+  const prevMonth = parsed.month === 1 ? 12 : parsed.month - 1
+
+  // Períodos de los dos meses
+  const { data: periods } = await supabase
+    .from('iadmin_accounting_periods')
+    .select('id, period_year, period_month')
+    .eq('managed_property_id', parsed.propertyId)
+    .in('period_year', [parsed.year, prevYear])
+    .in('period_month', [parsed.month, prevMonth])
+  const prevPeriod = periods?.find((p) => p.period_year === prevYear && p.period_month === prevMonth)
+  const currPeriod = periods?.find((p) => p.period_year === parsed.year && p.period_month === parsed.month)
+  if (!prevPeriod) return { replicated: 0 }
+
+  // Gastos del mes anterior (sólo de proveedores recurrentes)
+  const { data: prevExpenses } = await supabase
+    .from('iadmin_expenses')
+    .select('provider_id, amount, expense_kind, iadmin_providers!inner(is_recurring)')
+    .eq('managed_property_id', parsed.propertyId)
+    .eq('accounting_period_id', prevPeriod.id)
+    .not('provider_id', 'is', null)
+
+  type PrevExpenseRow = {
+    provider_id: string | null
+    amount: number | string | null
+    expense_kind: 'ordinaria' | 'extraordinaria' | null
+    iadmin_providers: { is_recurring: boolean } | { is_recurring: boolean }[] | null
+  }
+  const rawPrev = (prevExpenses ?? []) as unknown as PrevExpenseRow[]
+  const recurringPrev = rawPrev.filter((e) => {
+    const rel = e.iadmin_providers
+    if (!rel) return false
+    if (Array.isArray(rel)) return rel[0]?.is_recurring === true
+    return rel.is_recurring === true
+  })
+  if (recurringPrev.length === 0) return { replicated: 0 }
+
+  // Gastos del mes actual existentes (para no pisar)
+  const existingProviderIds = new Set<string>()
+  if (currPeriod) {
+    const { data: currExpenses } = await supabase
+      .from('iadmin_expenses')
+      .select('provider_id')
+      .eq('managed_property_id', parsed.propertyId)
+      .eq('accounting_period_id', currPeriod.id)
+    for (const row of currExpenses ?? []) {
+      if (row.provider_id) existingProviderIds.add(row.provider_id as string)
+    }
+  }
+
+  let replicated = 0
+  for (const exp of recurringPrev) {
+    const providerId = exp.provider_id as string
+    if (existingProviderIds.has(providerId)) continue
+    if (!exp.amount || Number(exp.amount) <= 0) continue
+    await upsertMonthlyCell({
+      propertyId: parsed.propertyId,
+      providerId,
+      year: parsed.year,
+      month: parsed.month,
+      amount: Number(exp.amount),
+      expenseKind: (exp.expense_kind as 'ordinaria' | 'extraordinaria') ?? 'ordinaria',
+    })
+    replicated++
+  }
+
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, 'layout')
+  return { replicated }
+}
+
+// ----------------------------------------------------------------------------
 // emitAndNotify: el boton magico del admin
 // ----------------------------------------------------------------------------
 
@@ -244,6 +422,7 @@ const emitSchema = z.object({
   propertyId: z.string().uuid(),
   year: z.number().int(),
   month: z.number().int().min(1).max(12),
+  extraNote: z.string().trim().max(280).optional(),
 })
 
 export type NeighborMessage = {
@@ -396,7 +575,7 @@ export async function quickPayFromMesa(input: z.input<typeof quickPaySchema>): P
     throw new Error(error.message)
   }
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   return { receiptNumber: receipt as string }
 }
 
@@ -448,7 +627,11 @@ export async function emitAndNotify(
     .reduce((s, e) => s + Number(e.amount), 0)
   const totalExpenses = Math.round((ordinaryTotal + extraordinaryTotal) * 100) / 100
 
-  // 3. Traer unidades activas con alícuota
+  // 3. Traer unidades activas con alícuota.
+  // Sólo incluímos `iadmin_unit_holders` acá. El contacto del propietario
+  // registrado en Citify (vía `unit_profile_memberships`) lo cargamos
+  // aparte abajo, en una query independiente, para no acoplar fallas de
+  // RLS de esa tabla con la lectura básica de las unidades.
   const { data: unitsData } = await supabase
     .from('iadmin_units')
     .select('id, code, prorata_coefficient, iadmin_unit_holders(full_name, phone, email, is_active)')
@@ -459,6 +642,34 @@ export async function emitAndNotify(
   const eligibleUnits = (unitsData ?? []).filter((u: any) => u.prorata_coefficient !== null)
   if (eligibleUnits.length === 0) {
     throw new Error('No hay unidades activas con alícuota definida.')
+  }
+
+  // Cargar contacto del propietario registrado en Citify por unidad.
+  // Si esta query falla por RLS, simplemente no enriquecemos y seguimos
+  // usando los datos de iadmin_unit_holders.
+  type OwnerContact = { fullName: string | null; phone: string | null; email: string | null }
+  const ownerByUnit = new Map<string, OwnerContact>()
+  try {
+    const unitIds = eligibleUnits.map((u: any) => u.id as string)
+    const { data: memberships } = await supabase
+      .from('unit_profile_memberships')
+      .select('unit_id, relationship_type, active, is_primary, profiles(full_name, email, phone)')
+      .in('unit_id', unitIds)
+      .eq('relationship_type', 'propietario')
+      .eq('active', true)
+    for (const m of memberships ?? []) {
+      const unitId = (m as any).unit_id as string
+      if (ownerByUnit.has(unitId) && !(m as any).is_primary) continue
+      const prof = Array.isArray((m as any).profiles) ? (m as any).profiles[0] : (m as any).profiles
+      if (!prof) continue
+      ownerByUnit.set(unitId, {
+        fullName: (prof.full_name ?? '').trim() || null,
+        phone: (prof.phone ?? '').trim() || null,
+        email: (prof.email ?? '').trim() || null,
+      })
+    }
+  } catch {
+    // Silencioso a propósito: no romper el flujo si esta lookup falla.
   }
 
   // 4. Saldo anterior por unidad
@@ -601,32 +812,64 @@ export async function emitAndNotify(
 
   const base = process.env.NEXT_PUBLIC_APP_BASE_URL ?? ''
 
+  // Fallback de datos bancarios: si la administración no tiene cargado CBU/alias
+  // en legal_info.bank, usamos la cuenta bancaria activa del consorcio.
+  let bankCbu: string | null = adminLegal.bank?.cbu ?? null
+  let bankAlias: string | null = adminLegal.bank?.alias ?? null
+  if (!bankCbu && !bankAlias) {
+    const { data: fallbackAccounts } = await supabase
+      .from('iadmin_cash_accounts')
+      .select('cbu, alias, kind, is_active')
+      .eq('managed_property_id', parsed.propertyId)
+      .eq('is_active', true)
+    const primary = (fallbackAccounts ?? []).find((a: { kind: string }) => a.kind === 'bank')
+      ?? (fallbackAccounts ?? [])[0]
+    if (primary) {
+      bankCbu = (primary.cbu as string | null) ?? null
+      bankAlias = (primary.alias as string | null) ?? null
+    }
+  }
+
   const neighbors: NeighborMessage[] = eligibleUnits.map((u: any) => {
     const item = (newItems ?? []).find((i: any) => i.unit_id === u.id)
     const itemId = item?.id as string
+
+    // Resolver contacto del vecino con esta prioridad (campo a campo):
+    //   1. Propietario activo registrado en Citify (cargado en ownerByUnit)
+    //   2. Holder cargado a mano por el admin (iadmin_unit_holders)
+    const owner = ownerByUnit.get(u.id) ?? null
     const holders = Array.isArray(u.iadmin_unit_holders) ? u.iadmin_unit_holders : []
     const holder = holders.find((h: any) => h?.is_active) ?? holders[0] ?? null
+
+    const contactName: string | null =
+      (owner?.fullName ?? '').trim() || (holder?.full_name ?? '').trim() || null
+    const contactPhone: string | null =
+      (owner?.phone ?? '').trim() || (holder?.phone ?? '').trim() || null
+    const contactEmail: string | null =
+      (owner?.email ?? '').trim() || (holder?.email ?? '').trim() || null
+
     const subtotal =
       Number(item?.ordinary_amount ?? 0) + Number(item?.extraordinary_amount ?? 0) + Number(item?.previous_balance ?? 0)
     const token = tokenByItem.get(itemId) ?? null
     const shareUrl = token ? `${base}/l/${token}` : null
 
-    const bankLine = adminLegal.bank?.cbu
-      ? `\nPara transferir: CBU ${adminLegal.bank.cbu}${adminLegal.bank.alias ? ` · Alias ${adminLegal.bank.alias}` : ''}`
+    const bankLine = bankCbu || bankAlias
+      ? `\nPara transferir: ${bankCbu ? `CBU ${bankCbu}` : ''}${bankCbu && bankAlias ? ' · ' : ''}${bankAlias ? `Alias ${bankAlias}` : ''}`
       : ''
 
-    const message = `Hola ${holder?.full_name ?? 'vecino/a'}! Ya está la liquidación de ${monthLabel} de ${propertyName}. Tu unidad ${u.code} debe pagar ${formatARS(subtotal)} con vencimiento el ${dueDates[0].date}.${bankLine}${shareUrl ? `\nDetalle: ${shareUrl}` : ''}`
+    const noteLine = parsed.extraNote ? `\n\n${parsed.extraNote}` : ''
+    const message = `Hola ${contactName ?? 'vecino/a'}! Ya está la liquidación de ${monthLabel} de ${propertyName}. Tu unidad ${u.code} debe pagar ${formatARS(subtotal)} con vencimiento el ${dueDates[0].date}.${bankLine}${shareUrl ? `\nDetalle: ${shareUrl}` : ''}${noteLine}`
 
-    const phone = (holder?.phone ?? '').replace(/[^\d+]/g, '')
+    const phone = (contactPhone ?? '').replace(/[^\d+]/g, '')
     const whatsappBase = phone ? `https://wa.me/${phone.startsWith('+') ? phone.slice(1) : phone}` : 'https://wa.me'
     const whatsappHref = `${whatsappBase}?text=${encodeURIComponent(message)}`
 
     return {
       itemId,
       unitCode: u.code,
-      holderName: holder?.full_name ?? null,
-      holderPhone: holder?.phone ?? null,
-      holderEmail: holder?.email ?? null,
+      holderName: contactName,
+      holderPhone: contactPhone,
+      holderEmail: contactEmail,
       amountToPay: Math.round(subtotal * 100) / 100,
       subtotal: Math.round(subtotal * 100) / 100,
       message,
@@ -644,7 +887,7 @@ export async function emitAndNotify(
     metadata: { period: periodLabelShort, neighbors: neighbors.length, total: totalExpenses },
   })
 
-  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`)
+  revalidatePath(`/iadmin/consorcios/${parsed.propertyId}`, "layout")
   revalidatePath(`/iadmin/liquidaciones/${run.id}`)
 
   return {

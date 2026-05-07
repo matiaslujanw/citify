@@ -1,7 +1,8 @@
 import Link from 'next/link'
-import { Building2, ChevronRight } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import type { IAdminContext } from '@/lib/types'
-import { IAdminBalanceHint, IAdminNav, IAdminNotificationsBadge } from './iadmin-nav'
+import { IAdminBalanceHint, IAdminNotificationsBadge } from './iadmin-nav'
+import { IAdminShellAside } from './iadmin-shell-aside'
 import { ChatWidget } from '@/components/ai/chat-widget'
 
 export function IAdminShell({
@@ -20,25 +21,11 @@ export function IAdminShell({
     <>
     <div className="min-h-screen bg-background pt-16">
       <div className="mx-auto flex max-w-[1400px] gap-6 px-6 py-6">
-        <aside className="hidden lg:block w-64 shrink-0">
-          <div className="glass-card sticky top-20 rounded-2xl">
-            <div className="border-b border-border/40 px-4 py-4">
-              <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-primary">
-                <Building2 className="w-3.5 h-3.5" />
-                Backoffice administrador
-              </div>
-              <div className="mt-1 text-base font-semibold text-foreground">
-                {primary?.administration.name ?? 'Sin administracion'}
-              </div>
-              {primary ? (
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  Rol: {primary.operationalRole}
-                </div>
-              ) : null}
-            </div>
-            <IAdminNav allowedCapabilities={allowedCapabilities} />
-          </div>
-        </aside>
+        <IAdminShellAside
+          primaryAdminName={primary?.administration.name ?? 'Sin administración'}
+          primaryRole={primary?.operationalRole ?? null}
+          allowedCapabilities={allowedCapabilities}
+        />
 
         <main className="min-w-0 flex-1">
           <header className="mb-6 flex items-center justify-between">
